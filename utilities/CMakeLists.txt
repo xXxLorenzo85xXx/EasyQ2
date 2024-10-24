@@ -1,0 +1,7 @@
+zephyr_include_directories(.)
+target_sources(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sensorhub.c)
+target_sources(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/queue.c)
+target_sources(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/utils.c)
+target_sources(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/crc8.c)
+target_sources(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sh_utils.c)
+target_sources(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/mxm_assert.c)

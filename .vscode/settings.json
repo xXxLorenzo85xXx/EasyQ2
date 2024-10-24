@@ -1,0 +1,31 @@
+{
+    "files.associations": {
+        "mrd106_isr.h": "c",
+        "mrd106_timers.h": "c",
+        "mrd106_helper.h": "c",
+        "sensorhub.h": "c",
+        "max86178.h": "c",
+        "zephyr.h": "c",
+        "spi.h": "c",
+        "limits": "c",
+        "kernel.h": "c",
+        "printk.h": "c",
+        "stdint.h": "c",
+        "device.h": "c",
+        "gpio.h": "c",
+        "sh_defs.h": "c",
+        "limits.h": "c",
+        "peripherals.h": "c",
+        "tmr_regs.h": "c",
+        "gpio_regs.h": "c",
+        "queue.h": "c",
+        "mxm_assert.h": "c",
+        "type_traits": "c",
+        "cmd_manager.h": "c",
+        "sh_comm_defs.h": "c",
+        "easyq.h": "c",
+        "easyq_helper.h": "c",
+        "mxc_errors.h": "c"
+    },
+    "C_Cpp.configurationWarnings": "disabled"
+}
