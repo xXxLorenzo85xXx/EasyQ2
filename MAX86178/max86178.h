@@ -1027,7 +1027,7 @@ union int_status {
 		};
 
 	};
-	uint8_t val[2];
+	uint8_t val[3];
 };
 
 
@@ -1264,7 +1264,7 @@ typedef enum _max86178_adc_osr_t {
 typedef int (*max86178_fifo_read_cb)(void);
 
 void *max86178_get_device_data(void);
-void max86178_init(const struct spi_dt_spec *spi_dev);
+int max86178_init(const struct spi_dt_spec *spi_dev);
 int max86178_startup_init(struct max86178_dev *sd);
 int max86178_write_reg(const struct spi_dt_spec *spi_dev, uint8_t reg_addr,uint8_t *data, uint32_t len);
 int max86178_read_reg(const struct spi_dt_spec *spi_dev, uint8_t *data, uint16_t len);
@@ -1314,4 +1314,10 @@ int max86178_get_num_photo_diodes(uint8_t *p_num_diode);
 
 void max86178_register_fifo_read_callback(max86178_fifo_read_cb func);
 void max86178_unregister_fifo_read_callback();
+
+int max86178_clear_fifo();
+
+int max86178_bioz_enable(max86178_bioz_meas_t meas);
+
+
 #endif

@@ -37,7 +37,7 @@ static void *max86178_set_device_data(void *dev_ptr)
 
 int max86178_read_reg(const struct spi_dt_spec *spi_dev, uint8_t *data, uint16_t len);
 
-void max86178_init(const struct spi_dt_spec *spi_dev)
+int max86178_init(const struct spi_dt_spec *spi_dev)
 {
 	int ret = 0;
 	uint8_t part_id, rev_id, num_pd;
@@ -307,14 +307,14 @@ int max86178_read_reg(const struct spi_dt_spec *spi_dev, uint8_t *data, uint16_t
     {
         printk("spi_read error: %i\n", ret);
     }
-    else
-    {
-		for (int i = 0; i < len; i++)
-		{
-			printk("max86178_read_reg  %d %d \n", init_reg, data[i]);
-			init_reg++;
-		}
-    }
+    // else
+    // {
+	// 	for (int i = 0; i < len; i++)
+	// 	{
+	// 		printk("max86178_read_reg  %d %d \n", init_reg, data[i]);
+	// 		init_reg++;
+	// 	}
+    // }
 
     // Free the allocated memory
     k_free(tx_buffer);
@@ -497,10 +497,12 @@ int max86178_get_meas_num(struct max86178_dev *sd) // OK
 	return meas_num;
 }
 
-static int update_bits(const struct spi_dt_spec *spi_dev, uint8_t reg, uint8_t mask, uint8_t val)
+static int update_bits(uint8_t reg, uint8_t mask, uint8_t val)
 {
 	int ret_val = MAX86178_SUCCESS;
 	uint8_t reg_val;
+
+	struct max86178_dev *sd = max86178_get_device_data();
 
 	if (val > mask)
 	{
@@ -520,14 +522,14 @@ static int update_bits(const struct spi_dt_spec *spi_dev, uint8_t reg, uint8_t m
 
 	if (ret_val == MAX86178_SUCCESS)
 	{
-		ret_val = max86178_read_reg(spi_dev, &reg_val, 1);
+		ret_val = max86178_read_reg(sd->spi_dev, &reg_val, 1);
 		if (ret_val == MAX86178_SUCCESS)
 		{
 			uint8_t tmp = 0;
 
 			tmp = reg_val & ~mask;
 			tmp |= val & mask;
-			ret_val = max86178_write_reg(spi_dev, reg, &tmp, sizeof(tmp));
+			ret_val = max86178_write_reg(sd->spi_dev, reg, &tmp, sizeof(tmp));
 		}
 	}
 
@@ -551,6 +553,19 @@ int max86178_dump_regs(const struct spi_dt_spec *spi_dev, uint8_t *buf,
 	}
 
 	return 0;
+}
+
+int max86178_bioz_enable(max86178_bioz_meas_t meas)
+{
+    int ret_val = MAX86178_SUCCESS;
+
+    if (meas >= MAX86178_BIOZ_MEAS_INVALID)
+        ret_val = MAX86178_FAILURE;
+
+    if (ret_val == MAX86178_SUCCESS)
+        ret_val = update_bits(MAX86178_BIOZ_CFG1_REG, MAX86178_BIOZ_ENABLE_MASK, (uint8_t)meas);
+
+    return ret_val;
 }
 
 int max86178_sensor_enable(struct max86178_dev *sd, int agc_enable, int enable) // OK
@@ -586,7 +601,7 @@ int max86178_sensor_enable(struct max86178_dev *sd, int agc_enable, int enable) 
 		ret = max86178_read_reg(sd->spi_dev, &fifo_cfg2_value, 1);
 
 
-        data=fifo_cfg2_value | MAX86178_FLUSH_FIFO_MASK | MAX86178_FIFO_STAT_CLR_MASK; // MAX86178_FIFO_STAT_CLR_MASK add 231024
+        data=fifo_cfg2_value | MAX86178_FLUSH_FIFO_MASK | MAX86178_FIFO_STAT_CLR_MASK | MAX86178_FIFO_RO_MASK; // MAX86178_FIFO_STAT_CLR_MASK add 231024
 		ret = max86178_write_reg(sd->spi_dev, MAX86178_FIFO_CFG2_REG, &data , 1); // MAX86178_A_FULL_EN_MASK | MAX86178_FRAME_RDY_EN_MASK);
 
         sd->curr_state=1;
@@ -621,19 +636,20 @@ int max86178_poweron(struct max86178_dev *sd)
 	buf &= ~MAX86178_SYSTEM_SHDN_MASK;
 	ret = max86178_write_reg(sd->spi_dev, MAX86178_SYSTEM_CFG1_REG, &buf, sizeof(buf));
 	//if (sd->regulator_state) todo
+	
+	ret |= max86178_regulator_onoff(sd, PWR_ON);
+	if (ret < 0)
 	{
-		ret |= max86178_regulator_onoff(sd, PWR_ON);
-		if (ret < 0)
-		{
-			printk("Unable to turn off the regulator. %s:%d, ret: %d\n",
-				   __func__, __LINE__, ret);
-		}
-		sd->regulator_state = 1;
-			buf = MAX86178_SYSTEM_CFG1_REG;
-			ret = max86178_read_reg(sd->spi_dev, &buf, 1);
-			buf &= ~MAX86178_DISABLE_I2C_MASK;
-			ret = max86178_write_reg(sd->spi_dev, MAX86178_SYSTEM_CFG1_REG, &buf, sizeof(buf));
+		printk("Unable to turn off the regulator. %s:%d, ret: %d\n",
+				__func__, __LINE__, ret);
 	}
+	//sd->regulator_state = 1;
+			// buf = MAX86178_SYSTEM_CFG1_REG;
+			// ret = max86178_read_reg(sd->spi_dev, &buf, 1);
+			// buf &= ~MAX86178_DISABLE_I2C_MASK;
+			// buf &= ~MAX86178_SYSTEM_ECG_BIOZ_TIMING_DATA_MASK;
+			// ret = max86178_write_reg(sd->spi_dev, MAX86178_SYSTEM_CFG1_REG, &buf, sizeof(buf));
+	
 	return ret;
 }
 int max86178_poweroff(struct max86178_dev *sd) // OK
@@ -706,8 +722,9 @@ int max86178_irq_handler(void *arg) // OK check for overlapping read of status r
 	union int_status status;
 
 	status.val[0] = MAX86178_STATUS1_REG;
-	ret = max86178_read_reg(sd->spi_dev, status.val, 2);
-	// printk("Status reg: %X %X\n", status_s.val[0], status_s.val[1]);
+	ret = max86178_read_reg(sd->spi_dev, status.val, 3);
+	printk("Status reg: %X %X %X\n", status.val[0], status.val[1], status.val[2]);
+	k_msleep(10);
 	if (ret < 0)
 	{
 		printk("Comm failed. err: %d. %s:%d\n",
@@ -803,6 +820,15 @@ int max86178_init_fifo(struct max86178_dev *sd, uint8_t a_full_val) // OK
 							  &data,
 							  sizeof(data));
 
+
+	// ret = max86178_write_reg(sd->spi_dev, MAX86178_FIFO_CFG1_REG, MAX86178_FIFO_A_FULL_MASK & a_full_val,1);
+
+	// ret |= max86178_write_reg(sd->spi_dev, MAX86178_FIFO_CFG2_REG,
+	// 		MAX86178_FIFO_RO_MASK |
+	// 		MAX86178_A_FULL_ONCE |
+	// 		MAX86178_FIFO_STAT_CLR_MASK |
+	// 		MAX86178_FLUSH_FIFO_MASK,1);							  
+
 	return ret;
 }
 
@@ -873,7 +899,8 @@ int max86178_get_num_of_channel(uint8_t *p_num_ch) // OK
 
 	reg[0] = MAX86178_PPG_CFG1_REG;
 	ret = max86178_read_reg(sd->spi_dev, reg, 1);
-
+	printk("Read Channel PPG Enabled %d\n", reg[0]);
+	k_msleep(10);
 	if (0 == ret)
 	{
 		for (index = 0; index < MAX86178_MEAS_CHMAX; index++)
@@ -883,6 +910,7 @@ int max86178_get_num_of_channel(uint8_t *p_num_ch) // OK
 	}
 
 	*p_num_ch = num_of_ch;
+	printk("Num Channel %d - %d\n", num_of_ch, *p_num_ch);
 
 	return ret;
 }
@@ -1014,29 +1042,111 @@ int max86178_is_iq_enabled(uint8_t *p_iq_enabled) // OK
 
 // };
 
+
+// CONFIGURATION FOR BIOZ
+// // Initial AFE configuration with no timing data enabled
+// struct regmap ppg_init_cfg[] = {
+// 	// MYG fill with MEAS1-2 config & ECG default for Test purposes - check ECG default from MRD104
+// 	{MAX86178_SYSTEM_CFG1_REG, MAX86178_SYSTEM_SHDN_MASK}, // CSB/I2C_SEL pin selects interface , disable all timing data
+// 	/* PLL */
+// 	///////////////////////////////////////////////////////////////////////////////{MAX86178_PIN_FUNC_CFG_REG, 0x1E},
+// 	{MAX86178_PLL_CFG1_REG, 0x00}, // PLL EN MDIV = 256 PLL_CLK = 32768*256
+// 	{MAX86178_PLL_CFG2_REG, 0xFF}, // PLL EN M =  MDIV+1 = 256 PLL_CLK = 32768*256
+// 	// BiOZ Clock
+// 	{MAX86178_PLL_CFG3_REG, 0x05}, // BioZ NDIV = 256, BIOZ KDIV = 1
+// 								   // ECG ADC Clock
+// 	{MAX86178_PLL_CFG4_REG, 0x03}, // ECG_FDIV = 4
+// 	{MAX86178_PLL_CFG5_REG, 0x40}, // ECG_NDIV = 64
+// 								   // 32768 internal osc as input to PLL
+// 	{MAX86178_PLL_CFG6_REG, 0x20}, // internal 32678Hz ref clock for PLL
+// 								   // PPG frame clock
+// 	{MAX86178_PPG_FRM_RATE_MSB_REG, 0x01},
+// 	{MAX86178_PPG_FRM_RATE_LSB_REG, 0x00}, // PPG to 25 hz with ref_clk 32768 division of 1307 - 0x51B
+ 
+// 	{MAX86178_PPG_CFG1_REG, 0x00},	   // En chan1-2-3   def 0x03  todo
+// 									   // MEAS1 settings: 
+// 	{MAX86178_MEAS1_SELECT_REG, 0x00}, // Both to LED1_DRV
+// 	{MAX86178_MEAS1_CFG1_REG, 0x58},
+// 	{MAX86178_MEAS1_CFG2_REG, 0x33},
+// 	{MAX86178_MEAS1_CFG3_REG, 0x00},
+// 	{MAX86178_MEAS1_CFG4_REG, 0x47},
+// 	{MAX86178_MEAS1_CFG5_REG, 0x0E},
+// 	{MAX86178_MEAS1_LED_A_REG, 0x1E},
+// 	{MAX86178_MEAS1_LED_B_REG, 0x00},
+// 	// MEAS2 settings:
+// 	{MAX86178_MEAS2_SELECT_REG, 0x09}, // Both to LED2_DRV
+// 	{MAX86178_MEAS2_CFG1_REG, 0x5A},
+// 	{MAX86178_MEAS2_CFG2_REG, 0x33},
+// 	{MAX86178_MEAS2_CFG3_REG, 0x00},
+// 	{MAX86178_MEAS2_CFG4_REG, 0x47},
+// 	{MAX86178_MEAS2_CFG5_REG, 0x0E},
+// 	{MAX86178_MEAS2_LED_A_REG, 0x0F},
+// 	{MAX86178_MEAS2_LED_B_REG, 0x00},
+// 	// ECG settings
+// 	{MAX86178_ECG_CFG1_REG, 0x08}, //0x04 DISABLED ECG  -  DEC= 64 => ECG SR = 512 with 32768 ECG_ADC clock, ECG DISABLED IN THIS CONFIG !! TO ENABLE WRITE : 0x05  todo
+// 	{MAX86178_ECG_CFG2_REG, 0x01}, // PGA gain is 1V/V , INA gain is 20V/V
+// 	{MAX86178_ECG_CFG3_REG, 0x01}, // Automatic INA recovery disabled , Enable the ECG MUX and assigned to ECGP = ECG_EL1 , ECGN= ECG_EL2, RLD = ECG_EL3
+// 	{MAX86178_ECG_CFG4_REG, 0x3F}, // Automatic fast recovery normal mode , Fast recovery threshold set to 95% of full scale
+// 	{MAX86178_CAL_CFG_1_REG, 0x00},
+// 	{MAX86178_CAL_CFG_2_REG, 0x00},
+// 	{MAX86178_CAL_CFG_3_REG, 0x00},
+// 	{MAX86178_LEAD_DETECT_CFG_1_REG, 0x00},
+// 	{MAX86178_LEAD_DETECT_CFG_2_REG, 0x00},
+// 	{MAX86178_LEAD_BIAS_CFG_1_REG, 0x04},
+// 	{MAX86178_RLD_CFG_1_REG, 0x4E},
+// 	{MAX86178_RLD_CFG_2_REG, 0x40},
+
+// 	// BiOZ Respiration setting
+// 	{MAX86178_BIOZ_CFG1_REG, 0xF5}, // ADC_OSR = 1024 , DAC_OSR = 256, ECG and BioZ bandgap bias enabled   0xf4 original 0xf7 iq enabled  todo
+// 	{MAX86178_BIOZ_CFG2_REG, 0x00}, // Set the digital HPF to bypass, Set the digital LPF to bypass,
+// 	{MAX86178_BIOZ_CFG3_REG, 0x38},
+// 	//{MAX86178_BIOZ_CFG3_REG, 0x28},
+// 	{MAX86178_BIOZ_CFG4_REG, 0x00},
+// 	{MAX86178_BIOZ_CFG5_REG, 0x00},
+// 	{MAX86178_BIOZ_CFG6_REG, 0x33}, // Set the analog HPF to 1kHz
+// 	{MAX86178_BIOZ_CFG7_REG, 0x8A},
+// 	{MAX86178_BIOZ_CFG8_REG, 0x00},
+// 	{MAX86178_BIOZ_LOW_THRESH_REG, 0x00},
+// 	{MAX86178_BIOZ_HIGH_THRESH_REG, 0xFF},
+// 	{MAX86178_BIOZ_MUX_CFG1_REG, 0x02}, // Enable the MUX
+// 	{MAX86178_BIOZ_MUX_CFG2_REG, 0x00},
+// 	{MAX86178_BIOZ_MUX_CFG3_REG, 0xA0},
+// 	{MAX86178_BIOZ_MUX_CFG4_REG, 0x1C},
+// 	{MAX86178_BIOZ_LEAD_DETCT_CFG1_REG, 0x10},
+// 	{MAX86178_BIOZ_LOFF_THRESH_REG, 0xB0},
+// 	{MAX86178_BIOZ_LEAD_BIAS_CFG1_REG, 0x0B},
+// 	{MAX86178_RESPIRATION_CFG1_REG, 0x00},
+	
+
+// };
 // Initial AFE configuration with no timing data enabled
 struct regmap ppg_init_cfg[] = {
 	// MYG fill with MEAS1-2 config & ECG default for Test purposes - check ECG default from MRD104
 	{MAX86178_SYSTEM_CFG1_REG, MAX86178_SYSTEM_SHDN_MASK}, // CSB/I2C_SEL pin selects interface , disable all timing data
 	/* PLL */
 	///////////////////////////////////////////////////////////////////////////////{MAX86178_PIN_FUNC_CFG_REG, 0x1E},
-	{MAX86178_PLL_CFG1_REG, 0x81}, // PLL EN MDIV = 256 PLL_CLK = 32768*256
-	{MAX86178_PLL_CFG2_REG, 0x70}, // PLL EN M =  MDIV+1 = 256 PLL_CLK = 32768*256
+	{MAX86178_PLL_CFG1_REG, 0x01}, // PLL EN MDIV = 256 PLL_CLK = 32768*256
+	{MAX86178_PLL_CFG2_REG, 0xFF}, // PLL EN M =  MDIV+1 = 256 PLL_CLK = 32768*256
 	// BiOZ Clock
-	{MAX86178_PLL_CFG3_REG, 0x83}, // BioZ NDIV = 256, BIOZ KDIV = 1
+	{MAX86178_PLL_CFG3_REG, 0x00}, // BioZ NDIV = 256, BIOZ KDIV = 1
 								   // ECG ADC Clock
 	{MAX86178_PLL_CFG4_REG, 0x03}, // ECG_FDIV = 4
 	{MAX86178_PLL_CFG5_REG, 0x40}, // ECG_NDIV = 64
 								   // 32768 internal osc as input to PLL
 	{MAX86178_PLL_CFG6_REG, 0x20}, // internal 32678Hz ref clock for PLL
+	//{MAX86178_PLL_CFG6_REG, 0x60}, // external 32678Hz ref clock for PLL 
 								   // PPG frame clock
-	{MAX86178_PPG_FRM_RATE_MSB_REG, 0x05},
-	{MAX86178_PPG_FRM_RATE_LSB_REG, 0x1B}, // PPG to 25 hz with ref_clk 32768 division of 1307 - 0x51B
+	{MAX86178_PPG_FRM_RATE_MSB_REG, 0x01},
+	{MAX86178_PPG_FRM_RATE_LSB_REG, 0x00}, // PPG to 25 hz with ref_clk 32768 division of 1307 - 0x51B
  
 	{MAX86178_PPG_CFG1_REG, 0x00},	   // En chan1-2-3   def 0x03  todo
+
+	//{MAX86178_PPG_CFG3_REG, 0x02},	   // PROVA
+
+//	{MAX86178_FIFO_CFG2_REG	, 0x00}, // PROVA2
 									   // MEAS1 settings: 
 	{MAX86178_MEAS1_SELECT_REG, 0x00}, // Both to LED1_DRV
-	{MAX86178_MEAS1_CFG1_REG, 0x5A},
+	{MAX86178_MEAS1_CFG1_REG, 0x58},
 	{MAX86178_MEAS1_CFG2_REG, 0x33},
 	{MAX86178_MEAS1_CFG3_REG, 0x00},
 	{MAX86178_MEAS1_CFG4_REG, 0x47},
@@ -1050,45 +1160,44 @@ struct regmap ppg_init_cfg[] = {
 	{MAX86178_MEAS2_CFG3_REG, 0x00},
 	{MAX86178_MEAS2_CFG4_REG, 0x47},
 	{MAX86178_MEAS2_CFG5_REG, 0x0E},
-	{MAX86178_MEAS2_LED_A_REG, 0x1F},
+	{MAX86178_MEAS2_LED_A_REG, 0x0F},
 	{MAX86178_MEAS2_LED_B_REG, 0x00},
 	// ECG settings
-	{MAX86178_ECG_CFG1_REG, 0x04}, //0x04 DISABLED ECG  -  DEC= 64 => ECG SR = 512 with 32768 ECG_ADC clock, ECG DISABLED IN THIS CONFIG !! TO ENABLE WRITE : 0x05  todo
-	{MAX86178_ECG_CFG2_REG, 0x81}, // PGA gain is 1V/V , INA gain is 20V/V
+	{MAX86178_ECG_CFG1_REG, 0x03}, //0x04 DISABLED ECG  -  DEC= 64 => ECG SR = 512 with 32768 ECG_ADC clock, ECG DISABLED IN THIS CONFIG !! TO ENABLE WRITE : 0x05  todo
+	{MAX86178_ECG_CFG2_REG, 0x01}, // PGA gain is 1V/V , INA gain is 20V/V
 	{MAX86178_ECG_CFG3_REG, 0x01}, // Automatic INA recovery disabled , Enable the ECG MUX and assigned to ECGP = ECG_EL1 , ECGN= ECG_EL2, RLD = ECG_EL3
-	{MAX86178_ECG_CFG4_REG, 0x3D}, // Automatic fast recovery normal mode , Fast recovery threshold set to 95% of full scale
+	{MAX86178_ECG_CFG4_REG, 0x3F}, // Automatic fast recovery normal mode , Fast recovery threshold set to 95% of full scale
 	{MAX86178_CAL_CFG_1_REG, 0x00},
 	{MAX86178_CAL_CFG_2_REG, 0x00},
 	{MAX86178_CAL_CFG_3_REG, 0x00},
 	{MAX86178_LEAD_DETECT_CFG_1_REG, 0x00},
 	{MAX86178_LEAD_DETECT_CFG_2_REG, 0x00},
 	{MAX86178_LEAD_BIAS_CFG_1_REG, 0x04},
-	{MAX86178_RLD_CFG_1_REG, 0xCF},
+	{MAX86178_RLD_CFG_1_REG, 0x4E},
 	{MAX86178_RLD_CFG_2_REG, 0x40},
 
 	// BiOZ Respiration setting
-	{MAX86178_BIOZ_CFG1_REG, 0xF4}, // ADC_OSR = 1024 , DAC_OSR = 256, ECG and BioZ bandgap bias enabled   0xf4 original 0xf7 iq enabled  todo
+	{MAX86178_BIOZ_CFG1_REG, 0xF5}, // ADC_OSR = 1024 , DAC_OSR = 256, ECG and BioZ bandgap bias enabled   0xf4 original 0xf7 iq enabled  todo
 	{MAX86178_BIOZ_CFG2_REG, 0x00}, // Set the digital HPF to bypass, Set the digital LPF to bypass,
 	{MAX86178_BIOZ_CFG3_REG, 0x2B},
-	//{MAX86178_BIOZ_CFG3_REG, 0x28},
-	{MAX86178_BIOZ_CFG4_REG, 0x80},
+	{MAX86178_BIOZ_CFG4_REG, 0x00},
 	{MAX86178_BIOZ_CFG5_REG, 0x00},
 	{MAX86178_BIOZ_CFG6_REG, 0x33}, // Set the analog HPF to 1kHz
 	{MAX86178_BIOZ_CFG7_REG, 0x8A},
-	{MAX86178_BIOZ_CFG8_REG, 0x02},
+	{MAX86178_BIOZ_CFG8_REG, 0x00},
 	{MAX86178_BIOZ_LOW_THRESH_REG, 0x00},
 	{MAX86178_BIOZ_HIGH_THRESH_REG, 0xFF},
-	{MAX86178_BIOZ_MUX_CFG1_REG, 0x42}, // Enable the MUX
-	{MAX86178_BIOZ_MUX_CFG2_REG, 0x02},
-	{MAX86178_BIOZ_MUX_CFG3_REG, 0xA0},
-	{MAX86178_BIOZ_MUX_CFG4_REG, 0x1B},
+	{MAX86178_BIOZ_MUX_CFG1_REG, 0x02}, // Enable the MUX
+	{MAX86178_BIOZ_MUX_CFG2_REG, 0x00},
+	{MAX86178_BIOZ_MUX_CFG3_REG, 0x00},
+	{MAX86178_BIOZ_MUX_CFG4_REG, 0x1C},
 	{MAX86178_BIOZ_LEAD_DETCT_CFG1_REG, 0x00},
 	{MAX86178_BIOZ_LOFF_THRESH_REG, 0x00},
-	{MAX86178_BIOZ_LEAD_BIAS_CFG1_REG, 0x07},
+	{MAX86178_BIOZ_LEAD_BIAS_CFG1_REG, 0x00},
 	{MAX86178_RESPIRATION_CFG1_REG, 0x00},
+	
 
 };
-
 int max86178_startup_init(struct max86178_dev *sd) // OK
 {
 	int ret = 0;
@@ -1099,7 +1208,7 @@ int max86178_startup_init(struct max86178_dev *sd) // OK
 		goto fail;
 
 	ret |= max86178_block_write(sd->spi_dev, ppg_init_cfg, ARRAY_SIZE(ppg_init_cfg));
-
+	k_msleep(200);
 	a_full = MAX86178_FIFO_AFULL;
 
 	ret |= max86178_write_reg(sd->spi_dev, MAX86178_FIFO_CFG1_REG, &a_full, 1);
@@ -1209,6 +1318,21 @@ int max86178_is_ppg2_enabled(uint8_t *p_is_enabled) // OK
 	return ret;
 }
 
+int32_t convert_18bit_to_17bit(uint32_t input) {
+    // Estrarre il bit di segno (MSB)
+    int32_t sign_bit = (input >> 17) & 0x1;
+
+    // Estrarre i 17 bit di dati
+    int32_t data_bits = input & 0x1FFFF;
+
+    // Se il bit di segno è 1, convertire i dati in complemento a due
+    if (sign_bit == 1) {
+        data_bits = -((~data_bits + 1) & 0x1FFFF);
+    }
+
+    return data_bits;
+}
+
 int max86178_fifo_irq_handler(struct max86178_dev *sd) // OK check for ECG-ACC interaction is required.
 {
 	uint8_t fifo_buf[MAX86178_MAX_FIFO_DEPTH * MAX86178_DATA_WORD_SIZE];
@@ -1255,8 +1379,10 @@ int max86178_fifo_irq_handler(struct max86178_dev *sd) // OK check for ECG-ACC i
 	{
 		idx = MAX86178_DATA_WORD_SIZE * i;
 		fifo_data.raw = fifo_buf[idx + 0] << 16 | fifo_buf[idx + 1] << 8 | fifo_buf[idx + 2];
-		if (fifo_data.type ==9 || fifo_data.type == 10)
-          printk("FIFO TYPE: %d DATA: %d \n ",fifo_data.type, fifo_data.raw );
+		//if (fifo_data.type ==9 || fifo_data.type == 10)  //BIOZ
+		if (fifo_data.type ==11 ) // ECG
+		//if (fifo_data.type ==9 || fifo_data.type == 10 || fifo_data.type ==11 || fifo_data.type == 14) // ECG
+          printk("FIFO TYPE: %d DATA: %d \n ",fifo_data.type, convert_18bit_to_17bit(fifo_data.val) );
 		k_msleep(10);
 		if (fifo_data.type < DATA_TYPE_PF && ppg_discard)
 		{
@@ -1290,6 +1416,7 @@ int max86178_fifo_irq_handler(struct max86178_dev *sd) // OK check for ECG-ACC i
 #endif
 	}
      printk("=====================================\n");
+	 //k_msleep(10);
 	/*
 		Please note that this method can only work with single sample reading per interrupt
 		from OS58, otherwise it breaks Accel and OS58 sync.
@@ -1305,6 +1432,9 @@ int max86178_fifo_irq_handler(struct max86178_dev *sd) // OK check for ECG-ACC i
 
 	max86178_is_ppg1_enabled(&ppg1);
 	max86178_is_ppg2_enabled(&ppg2);
+	k_msleep(10);
+	printk("Measures Enable: PPG: %d PPG1: %d PPG2: %d ECG: %d ACC: %d IQ: %d\n", ppg_enabled, ppg1, ppg2, ecg_enabled, acc_enabled, iq_enabled);
+	k_msleep(10);
 
 	if (0 == ppg1 && 0 == ppg2)
 		ppg_enabled = 0;
@@ -1477,6 +1607,33 @@ int max86178_is_ecg_faster_than_ppg(uint8_t *p_is_true) // OK check for MRD106 c
 		{
 			*p_is_true = 0;
 		}
+	}
+
+	return ret;
+}
+
+int max86178_clear_fifo() //OK
+{
+	int ret = 0;
+	unsigned char byt = 0;
+	struct max86178_dev *sd;
+
+	/* Getting sensor descriptor */
+	sd = max86178_get_device_data();
+
+	if(NULL == sd)
+		ret = -1;
+
+	if(0 == ret)
+	{
+		byt = MAX86178_FIFO_CFG2_REG;
+		ret = max86178_read_reg(sd->spi_dev, &byt, 1);
+	}
+
+	if(0 == ret)
+	{
+		byt |= MAX86178_FLUSH_FIFO_MASK;
+		ret = max86178_write_reg(sd->spi_dev, MAX86178_FIFO_CFG2_REG, &byt, sizeof(byt));
 	}
 
 	return ret;

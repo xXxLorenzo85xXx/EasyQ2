@@ -11,6 +11,7 @@
 #include "utilities/mxc_errors.h"
 #include <zephyr/irq.h>
 #include <zephyr/devicetree.h>
+#include <sys/time.h>
 
 #define GPIO0_NODE DT_NODELABEL(gpio0)
 #define GPIO_PIN_8 8
@@ -83,7 +84,7 @@ void timer_expiry_fn(struct k_timer *dummy)
 			.value = 1234,
 		};
 		cmd_event_manager_put(&evt, &cmd_event_msgq);
-		// app++;
+		 app++;
 	};
 };
 /*Define the timer*/
@@ -125,10 +126,13 @@ void gpio_callback_1(const struct device *dev, struct gpio_callback *cb, uint32_
 {
    // printk("GPIO interrupt on pin 8 triggered!\n");
     // Gestisci l'interrupt GPIO 8 qui
-	if (sensor_started == true)
-	{
-		start_read = true;
 
+	if (sensor_started == true && sensor_enabled == true)
+	{
+		//uint32_t timestamp = k_uptime_get();
+		//printk("GPIO interrupt on pin 8 triggered! %u \n", timestamp );
+		start_read = true;
+        
 
 	}
 }
@@ -149,7 +153,7 @@ static struct gpio_callback gpio_cb_2;
  */
 int main(void)
 {
-
+	uint8_t ret = 0;
 	if (!device_is_ready(spispec.bus))
 	{
 		printk("SPI not ready");
@@ -187,6 +191,7 @@ int main(void)
 	m_easyq = geteasyq();
 	m_easyq->init();
 	biosensor = m_easyq->getSensor(SH_MAX86178);
+//	biosensor->init();
 
 	while (1)
 	{
@@ -195,16 +200,23 @@ int main(void)
 
 		if (start_read)
 		{
+				uint32_t timestamp = k_uptime_get();
+			printk("----------------- START READ (%u)-----------------", timestamp);
 				struct max86178_dev *max86178_driver = max86178_get_device_data();
+					
 	        //     max86178_fifo_irq_handler(max86178_driver); // gestione interrupt sensore max86178
 
 
 				 //	if(max86178_get_irq_state(NULL) > 0) {
-		if (max86178_irq_handler(max86178_driver) > 0)
+		if (max86178_irq_handler(max86178_driver) > 0){
 			max86178_irq_reset_ref_cnt();
+			max86178_clear_fifo();// force fifo clear
+		}
 
 		//printf("Queue sample count: %d\r\n", sd->queue.num_item);
 	//}
+	//			max86178_irq_reset_ref_cnt();
+	//		max86178_clear_fifo();// force fifo clear
 				 start_read = false;
 		}
 
@@ -226,11 +238,16 @@ int main(void)
 				printk("Run ACC event! code: %d", cmd_evt.cmd);
 				break;
 			case CMD_TYPE_INIT_MAX86178:
-				max86178_init(&spispec); // init sensore max86178
+				ret = max86178_init(&spispec); // init sensore max86178
+				if(ret == 0)
+				printk("Init MAX86178 Success! code\n");
+				else
+				printk("Init MAX86178 Failed! code: %d\n", ret);
+				k_msleep(10);
 				sensor_started = true;
 				break;
 			case CMD_TYPE_RUN_MAX86178:
-				 struct max86178_dev *max86178_driver = max86178_get_device_data();
+				//  struct max86178_dev *max86178_driver = max86178_get_device_data();
 				//  max86178_sensor_enable(max86178_driver, 1, 1); // avvio sensore max86178
 
 
@@ -255,12 +272,16 @@ int main(void)
 
 				if (sensor_enabled == false)
 				{
-									    max86178_sensor_enable(max86178_driver, 1, 1); // avvio sensore max86178
+					struct max86178_dev *max86178_driver = max86178_get_device_data();
+					ret = max86178_sensor_enable(max86178_driver, 1, 1); // avvio sensore max86178
+				//	max86178_bioz_enable(MAX86178_BIOZ_MEAS_I);
 					//max86178_set_frame_ready_int(1);
 					
 					//max86178_set_a_full_int(1);
-					//max86178_init_fifo(max86178_driver, 0x0F);
+					//max86178_init_fifo(max86178_driver, 0x80);
 					sensor_enabled = true;
+					printk("Run MAX86178! Err: %d\n", ret);
+					k_msleep(10);
 					// // Configura GPIO 8 come input con interrupt su rising edge
 					// gpio_pin_configure(gpio0_dev, GPIO_PIN_8, GPIO_INPUT | GPIO_PULL_UP);
 					// gpio_pin_interrupt_configure(gpio0_dev, GPIO_PIN_8, GPIO_INT_EDGE_RISING);
@@ -300,7 +321,7 @@ int main(void)
 				break;
 			}
 		}
-		k_msleep(100);
+		//k_msleep(10);
 	}
 
 	// k_msleep(10);
